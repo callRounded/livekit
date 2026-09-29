@@ -571,6 +571,12 @@ func (p *ParticipantImpl) ConnectedAt() time.Time {
 	return p.connectedAt
 }
 
+// SessionStartTime is when the RTC node started the join attempt that created
+// this participant.
+func (p *ParticipantImpl) SessionStartTime() time.Time {
+	return p.params.SessionStartTime
+}
+
 func (p *ParticipantImpl) ActiveAt() time.Time {
 	if activeAt := p.lastActiveAt.Load(); activeAt != nil {
 		return *activeAt

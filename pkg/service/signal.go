@@ -183,7 +183,12 @@ func (r *signalService) RelaySignal(stream psrpc.ServerStream[*rpc.RelaySignalRe
 	err = r.sessionHandler.HandleSession(ctx, *pi, livekit.ConnectionID(ss.ConnectionId), reqChan, sink)
 	if err != nil {
 		sink.Close()
-		l.Errorw("could not handle new participant", err)
+		if errors.Is(err, ErrSignalConnectionClosed) || errors.Is(err, ErrJoinAttemptSuperseded) {
+			// a join attempt the signal relay had already given up on
+			l.Infow("dropped stale participant session", "error", err)
+		} else {
+			l.Errorw("could not handle new participant", err)
+		}
 	}
 	return
 }
