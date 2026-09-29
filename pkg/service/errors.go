@@ -49,4 +49,6 @@ var (
 	ErrNoConnectRequest                 = psrpc.NewErrorf(psrpc.InvalidArgument, "no connect request")
 	ErrNoConnectResponse                = psrpc.NewErrorf(psrpc.InvalidArgument, "no connect response")
 	ErrDestinationIdentityRequired      = psrpc.NewErrorf(psrpc.InvalidArgument, "destination identity is required")
+	ErrSignalConnectionClosed           = psrpc.NewErrorf(psrpc.Canceled, "signal connection closed before the session started")
+	ErrJoinAttemptSuperseded            = psrpc.NewErrorf(psrpc.Aborted, "a newer session with the same identity already joined")
 )

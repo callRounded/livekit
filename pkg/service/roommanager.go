@@ -301,6 +301,23 @@ func (r *RoomManager) StartSession(
 		return nil
 	}
 
+	// The signal relay gives a join attempt a few seconds to answer, then
+	// closes that attempt's stream and starts a new one. When this attempt was
+	// held up (creating the room can take seconds), the newer one may already
+	// have joined with the same identity, and going on would evict that live
+	// participant as a duplicate. Nobody waits for this session any more.
+	if requestSource.IsClosed() {
+		prometheus.IncrementParticipantRtcCanceled(1)
+		logger.Infow("signal connection closed before the session started, dropping join attempt",
+			"room", room.Name(),
+			"participant", pi.Identity,
+			"connID", requestSource.ConnectionID(),
+			"reconnect", pi.Reconnect,
+			"waited", time.Since(sessionStartTime),
+		)
+		return ErrSignalConnectionClosed
+	}
+
 	// should not error out, error is logged in iceServersForParticipant even if it fails
 	// since this is used for TURN server credentials, we don't want to fail the request even if there's no TURN for the session
 	apiKey, _, _ := r.getFirstKeyPair()
@@ -373,6 +390,18 @@ func (r *RoomManager) StartSession(
 
 			go r.rtcSessionWorker(room, participant, requestSource)
 			return nil
+		}
+
+		// A retry of this join may have started after this attempt and joined
+		// first. Even when this attempt's stream is not seen closed yet (the
+		// close can arrive late), the most recent attempt wins.
+		if joinedBySupersedingSession(participant, sessionStartTime) {
+			prometheus.IncrementParticipantRtcCanceled(1)
+			participant.GetLogger().Infow("a newer session already joined, dropping join attempt",
+				"connID", requestSource.ConnectionID(),
+				"waited", time.Since(sessionStartTime),
+			)
+			return ErrJoinAttemptSuperseded
 		}
 
 		// we need to clean up the existing participant, so a new one can join
@@ -599,6 +628,24 @@ func (r *RoomManager) StartSession(
 
 	go r.rtcSessionWorker(room, participant, requestSource)
 	return nil
+}
+
+type sessionStarter interface {
+	SessionStartTime() time.Time
+}
+
+var _ sessionStarter = (*rtc.ParticipantImpl)(nil)
+
+// joinedBySupersedingSession reports whether existing, a participant with the
+// identity of a join attempt started at sessionStartTime, comes from a more
+// recent join attempt that is still live. A closed participant is only waiting
+// to be removed and does not hold its identity.
+func joinedBySupersedingSession(existing types.LocalParticipant, sessionStartTime time.Time) bool {
+	if existing.IsClosed() {
+		return false
+	}
+	newer, ok := existing.(sessionStarter)
+	return ok && newer.SessionStartTime().After(sessionStartTime)
 }
 
 // create the actual room object, to be used on RTC node
