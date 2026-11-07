@@ -18,9 +18,11 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
 
 	"github.com/dennwc/iters"
 	"github.com/twitchtv/twirp"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -34,6 +36,7 @@ func (s *IOInfoService) matchSIPTrunk(ctx context.Context, trunkID string, call 
 	if s.ss == nil {
 		return nil, ErrSIPNotConnected
 	}
+	call = withoutSpoofableFromHost(call)
 	if trunkID != "" {
 		// This is a best-effort optimization. Fallthrough to listing trunks if it doesn't work.
 		if tr, err := s.ss.LoadSIPInboundTrunk(ctx, trunkID); err == nil {
@@ -45,6 +48,35 @@ func (s *IOInfoService) matchSIPTrunk(ctx context.Context, trunkID string, call 
 	}
 	it := s.SelectSIPInboundTrunk(ctx, call.To.User)
 	return sip.MatchTrunkIter(it, call)
+}
+
+// withoutSpoofableFromHost returns the call that trunks are matched against.
+// The pinned protocol's matchAddrMasks lets an allowed_addresses entry match
+// the From host as well as the source IP, and the caller writes the From
+// header: an INVITE from anywhere claiming an allowed IP in From would pass.
+// A From host written as an IP other than the source is cleared here, so IP
+// entries only ever match the source, as upstream does since protocol
+// b8c797a0 (#1889). A hostname From is left alone, as upstream leaves it.
+// Drop this once protocol is at or past that commit.
+func withoutSpoofableFromHost(call *rpc.SIPCall) *rpc.SIPCall {
+	if call == nil || call.From == nil || call.From.Host == call.SourceIp || !looksLikeIPMask(call.From.Host) {
+		return call
+	}
+	c := proto.Clone(call).(*rpc.SIPCall)
+	c.From.Host = ""
+	return c
+}
+
+// looksLikeIPMask reports whether host would be read as an IP address or
+// prefix, bracketed or not, which matchAddrMasks could compare to an entry.
+func looksLikeIPMask(host string) bool {
+	addr, _, _ := strings.Cut(host, "/")
+	addr = strings.TrimSuffix(strings.TrimPrefix(addr, "["), "]")
+	if i := strings.LastIndexByte(addr, '%'); i > 0 {
+		addr = addr[:i]
+	}
+	_, err := netip.ParseAddr(addr)
+	return err == nil
 }
 
 func (s *IOInfoService) SelectSIPInboundTrunk(ctx context.Context, called string) iters.Iter[*livekit.SIPInboundTrunkInfo] {
